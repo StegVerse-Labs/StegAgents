@@ -1,10 +1,12 @@
 name: StegIndexers Runner
 
 on:
+  # Manual trigger from Actions tab
   workflow_dispatch:
-  # Uncomment this to run automatically every 12 hours
-  # schedule:
-  #   - cron: "0 */12 * * *"
+
+  # Automated daily run at 04:00 UTC
+  schedule:
+    - cron: "0 4 * * *"
 
 permissions:
   contents: write
@@ -18,6 +20,7 @@ jobs:
       max-parallel: 1
       matrix:
         agent:
+          - Indexer-FreeDom-001
           - Indexer-Harvest-001
           - Indexer-Timeline-001
           - Indexer-Multiverse-001
@@ -32,6 +35,13 @@ jobs:
     steps:
       - name: Checkout StegAgents
         uses: actions/checkout@v4
+
+      - name: Checkout FREE-DOM (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: StegVerse/FREE-DOM
+          path: FREE-DOM
+          token: ${{ secrets.GH_FREEDOM_READ_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
