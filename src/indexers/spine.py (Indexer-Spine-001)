@@ -1,0 +1,65 @@
+import json
+from datetime import datetime
+from pathlib import Path
+
+from ._paths import OUT_DIR
+from ..llm_client import call_llm
+
+
+TIMELINE_FILE = OUT_DIR / "timeline.json"
+BRANCHES_FILE = OUT_DIR / "plot_branches.json"
+ETHICS_FILE = OUT_DIR / "ethics_report.json"
+GAPS_FILE = OUT_DIR / "gap_analysis.json"
+SPINE_FILE = OUT_DIR / "narrative_spine.md"
+
+
+def _safe_read(path: Path) -> str:
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+def run() -> None:
+    """
+    Indexer-Spine-001
+
+    Generates a narrative 'spine' (high-level chapter flow) for the future
+    book, based on the timeline, branches, ethics, and gaps.
+    """
+    timeline = _safe_read(TIMELINE_FILE)
+    branches = _safe_read(BRANCHES_FILE)
+    ethics = _safe_read(ETHICS_FILE)
+    gaps = _safe_read(GAPS_FILE)
+
+    system_msg = (
+        "You are constructing the narrative spine for a memoir+technical book. "
+        "Using the timeline, narrative branches, ethics guidance, and gap "
+        "analysis, produce a markdown outline that:\n"
+        "- Respects ethical/red-line constraints\n"
+        "- Highlights where research must be completed later\n"
+        "- Separates personal narrative, technical exposition, and analysis\n\n"
+        "Output: a single markdown document with sections, subsections, and "
+        "TODO markers for missing research."
+    )
+
+    user_msg = (
+        f"Timeline JSON:\n{timeline}\n\n"
+        f"Narrative branches JSON:\n{branches}\n\n"
+        f"Ethics report JSON:\n{ethics}\n\n"
+        f"Gap analysis JSON:\n{gaps}\n\n"
+        "Generate the narrative spine markdown."
+    )
+
+    content = call_llm(
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+        max_tokens=2600,
+    )
+
+    header = (
+        "# Narrative Spine – Working Outline\n\n"
+        f"_Generated at {datetime.utcnow().isoformat()}Z by Indexer-Spine-001._\n\n"
+    )
+
+    SPINE_FILE.write_text(header + content, encoding="utf-8")
+    print(f"[Indexer-Spine-001] Wrote narrative spine to {SPINE_FILE}")
