@@ -19,14 +19,13 @@ jobs:
         agent:
           - BookWriter-001
           - SocialMedia-001
-          - PatentAI-001
           - GrantFinder-001
           - DevOpsGuardian-001
 
-    # Map your repo secret `OPEN_API_KEY` -> env var `OPENAI_API_KEY` for the Python client
+    # Map repo secret `OPENAI_API_KEY` -> env var `OPENAI_API_KEY`
     env:
       AGENT_NAME: ${{ matrix.agent }}
-      OPENAI_API_KEY: ${{ secrets.OPEN_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
     steps:
       - name: Checkout StegAgents
@@ -43,17 +42,6 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run agent
-        run: python -m src.main
-
-      - name: Commit outputs (if any)
-        if: matrix.agent == 'DevOpsGuardian-001'
         run: |
-          if git status --porcelain | grep .; then
-            echo "Changes detected — committing outputs."
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add out
-            git commit -m "Agent outputs [skip ci]"
-            git push
-          else
-            echo "No new output to commit."
+          echo "[StegAgents] Running agent: ${AGENT_NAME}"
+          python -m src.main
