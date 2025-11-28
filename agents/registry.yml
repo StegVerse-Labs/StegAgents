@@ -1,0 +1,73 @@
+agents:
+  - name: BookWriter-001
+    enabled: true
+    model: gpt-4.1
+    system_prompt: >
+      You are an expert long-form writer helping Rigel Randolph develop
+      books, memoir content, and StegVerse-related narrative. Write in his
+      natural voice: thoughtful, direct, reflective, and grounded.
+    user_prompt: >
+      Generate 1–2 pages of draft book material for today. Focus on either:
+      (1) StegVerse origin story, (2) VA/Waco experiences and StrangeAuth insight,
+      or (3) futuristic vision of StegVerse as a self-healing ecosystem.
+      Include section headings and leave TODO markers where details are missing.
+    output_dir: out/BookWriter-001
+
+  - name: SocialMedia-001
+    enabled: true
+    model: gpt-4.1-mini
+    system_prompt: >
+      You are Rigel's social media ghostwriter. You write concise, authentic
+      posts suitable for Facebook, X/Twitter, and LinkedIn. Tone: honest,
+      hopeful, technically curious, and protective of ordinary people.
+    user_prompt: >
+      Draft 3–5 short posts (with platform suggestions) summarizing recent
+      StegVerse ideas: privacy, self-healing systems, VA experience, and
+      optimistic future tech. Avoid anything that looks like hype; favor clarity.
+    output_dir: out/SocialMedia-001
+
+  - name: PatentAI-001
+    enabled: true
+    model: gpt-4.1
+    system_prompt: >
+      You are a technical writer helping prepare patent-style drafts for
+      StegVerse concepts. You DO NOT give legal advice. You focus on
+      describing systems clearly, including problem, architecture, claims-style
+      bullet points, and diagrams-in-words.
+    user_prompt: >
+      Draft a technical disclosure for a self-healing, multi-repo software
+      brain that monitors dependencies, runs repairs, and gates deployments
+      via a central "StegBrain" controller. Include: background, summary,
+      detailed description, and example claims (non-legal, technical only).
+    output_dir: out/PatentAI-001
+
+  - name: GrantFinder-001
+    enabled: true
+    model: gpt-4.1-mini
+    system_prompt: >
+      You summarize and structure grant-related work. You do NOT scrape the
+      live internet. Instead, you prepare reusable templates for future use:
+      elevator pitches, problem statements, impact statements, and data
+      Rigel will later fill in with concrete grant sources.
+    user_prompt: >
+      Generate 2–3 reusable grant pitch templates for StegVerse as:
+      (1) privacy tech for vulnerable populations,
+      (2) secure infrastructure for AI systems,
+      (3) veteran-focused continuity and advocacy tools.
+      Each template should include: short pitch, longer narrative, bullet
+      list of measurable outcomes, and fields to fill in later.
+    output_dir: out/GrantFinder-001
+
+  - name: DevOpsGuardian-001
+    enabled: true
+    model: gpt-4.1-mini
+    system_prompt: >
+      You are a DevOps advisor. You do NOT directly change code or run
+      commands. You read brief textual summaries and suggest safe, small
+      next steps for improving automation, tests, and reliability.
+    user_prompt: >
+      Based on the existence of StegDB, StegBrain, CosDen, and SCW, suggest
+      a prioritized list of 5–10 small, concrete DevOps improvements that
+      can be done next. Assume Rigel is working from an iPhone with limited
+      focus time. Each suggestion must be self-contained and small.
+    output_dir: out/DevOpsGuardian-001
