@@ -1,18 +1,18 @@
 import os
-import sys
 
 from .agent_runner import run_agent
 
-def main():
-    # Agent name can come from env or CLI
-    agent_name = os.environ.get("AGENT_NAME")
-    if not agent_name and len(sys.argv) > 1:
-        agent_name = sys.argv[1]
 
+def main() -> None:
+    agent_name = os.getenv("AGENT_NAME")
     if not agent_name:
-        raise SystemExit("AGENT_NAME env var or CLI arg required")
+        raise SystemExit(
+            "AGENT_NAME environment variable is required but not set."
+        )
 
+    print(f"[StegAgents] main() starting with AGENT_NAME={agent_name!r}")
     run_agent(agent_name)
+    print("[StegAgents] main() finished.")
 
 
 if __name__ == "__main__":
