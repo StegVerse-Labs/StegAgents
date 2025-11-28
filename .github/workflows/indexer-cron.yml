@@ -1,0 +1,49 @@
+name: StegIndexers Runner
+
+on:
+  workflow_dispatch:
+  # Uncomment this to run automatically every 12 hours
+  # schedule:
+  #   - cron: "0 */12 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  run-indexers:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        agent:
+          - Indexer-Harvest-001
+          - Indexer-Timeline-001
+          - Indexer-Multiverse-001
+          - Indexer-Ethics-001
+          - Indexer-Gaps-001
+          - Indexer-Spine-001
+
+    env:
+      AGENT_NAME: ${{ matrix.agent }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - name: Checkout StegAgents
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run indexer agent
+        run: |
+          echo "[StegAgents] Running indexer: ${AGENT_NAME}"
+          python -m src.main
