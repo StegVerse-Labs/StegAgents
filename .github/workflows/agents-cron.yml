@@ -1,20 +1,27 @@
 name: StegAgents Runner
 
 on:
-  workflow_dispatch:
+  # Manual runs from the Actions tab
+  workflow_dispatch: {}
+
+  # Scheduled runs (every 12 hours)
   schedule:
-    # Every 12 hours
     - cron: "0 */12 * * *"
 
 permissions:
+  # Allow agents to write content back into the repo in the future
   contents: write
 
 jobs:
   run-agents:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     strategy:
+      # Don't stop other agents if one fails
       fail-fast: false
+      # Limit concurrency so we don't hammer the API all at once
+      max-parallel: 2
       matrix:
         agent:
           - BookWriter-001
@@ -22,9 +29,10 @@ jobs:
           - GrantFinder-001
           - DevOpsGuardian-001
 
-    # Map repo secret `OPENAI_API_KEY` -> env var `OPENAI_API_KEY`
     env:
+      # Which agent to run in this matrix job
       AGENT_NAME: ${{ matrix.agent }}
+      # Map your repository secret to the environment variable our code expects
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
     steps:
