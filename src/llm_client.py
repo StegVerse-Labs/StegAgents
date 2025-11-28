@@ -1,7 +1,6 @@
 import os
 import time
-import json
-from typing import Any, Dict
+from typing import List, Dict, Any
 
 import requests
 
@@ -9,136 +8,70 @@ import requests
 API_URL = "https://api.openai.com/v1/chat/completions"
 
 
-def _get_api_key() -> str:
-    """
-    Fetch the OpenAI API key from the environment.
+class MissingAPIKey(RuntimeError):
+    pass
 
-    We use OPENAI_API_KEY (set in the GitHub Actions workflow) so the
-    key name is consistent everywhere.
-    """
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not set in environment")
-    return api_key
+
+def _get_api_key() -> str:
+    key = os.environ.get("OPENAI_API_KEY")
+    if not key:
+        raise MissingAPIKey("OPENAI_API_KEY not set in environment")
+    return key
 
 
 def call_llm(
-    prompt: str,
-    model: str = "gpt-4o-mini",
+    messages: List[Dict[str, str]],
+    model: str = "gpt-4.1-mini",
     max_tokens: int = 1200,
-    temperature: float = 0.7,
-    max_retries: int = 5,
-    base_delay_seconds: float = 5.0,
+    temperature: float = 0.4,
+    retries: int = 3,
+    initial_backoff: float = 2.0,
 ) -> str:
     """
-    Call the OpenAI Chat Completions API with robust retry logic.
+    Low-level wrapper for OpenAI's chat completions endpoint using `requests`.
 
-    - Retries on 429 / 5xx errors with exponential backoff.
-    - Logs what it's doing so the Actions log becomes our "black box recorder".
+    `messages` is a standard OpenAI messages list:
+      [{"role": "system", "content": "..."}, {"role": "user", "content": "..."}]
     """
-
     api_key = _get_api_key()
-
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
-    body: Dict[str, Any] = {
+    payload: Dict[str, Any] = {
         "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a helpful AI assistant working inside the "
-                    "StegVerse StegAgents subsystem. Respond concisely and "
-                    "clearly, focusing on actionable output."
-                ),
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
+        "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
 
-    attempt = 0
+    backoff = initial_backoff
 
-    while True:
-        attempt += 1
+    for attempt in range(1, retries + 1):
+        resp = requests.post(API_URL, headers=headers, json=payload)
         try:
-            print(
-                f"[LLM] Calling model='{model}' "
-                f"(attempt {attempt}/{max_retries})"
-            )
-
-            response = requests.post(
-                API_URL,
-                headers=headers,
-                json=body,
-                timeout=60,
-            )
-
-            # Success path
-            if response.status_code == 200:
-                data = response.json()
-                try:
-                    content = data["choices"][0]["message"]["content"]
-                except (KeyError, IndexError) as exc:
-                    raise RuntimeError(
-                        f"Unexpected response structure from OpenAI: {json.dumps(data)[:500]}"
-                    ) from exc
-
-                print("[LLM] Call successful.")
-                return content
-
-            # Transient / rate-limit errors we should retry
-            if response.status_code in (429, 500, 502, 503, 504):
-                # Respect Retry-After header when present
-                retry_after_header = response.headers.get("Retry-After")
-                if retry_after_header:
-                    try:
-                        delay = float(retry_after_header)
-                    except ValueError:
-                        delay = base_delay_seconds
-                else:
-                    delay = base_delay_seconds * (2 ** (attempt - 1))
-
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as exc:
+            status = resp.status_code
+            # Gentle handling for rate limits
+            if status in (429, 500, 502, 503, 504) and attempt < retries:
                 print(
-                    f"[LLM] Transient error {response.status_code}: "
-                    f"{response.text[:200]}..."
+                    f"[llm_client] Transient error {status} on attempt "
+                    f"{attempt}/{retries}; backing off {backoff:.1f}s..."
                 )
-
-                if attempt >= max_retries:
-                    raise RuntimeError(
-                        f"Exceeded max_retries ({max_retries}) for transient "
-                        f"error {response.status_code}"
-                    )
-
-                # Cap delay to something sane
-                delay = min(delay, 60.0)
-                print(f"[LLM] Sleeping {delay:.1f}s before retry...")
-                time.sleep(delay)
+                time.sleep(backoff)
+                backoff *= 2
                 continue
 
-            # Non-retryable errors: log and raise
-            raise RuntimeError(
-                f"OpenAI API returned status {response.status_code}: "
-                f"{response.text[:500]}"
-            )
+            # Re-raise for non-retryable or final failure
+            print(f"[llm_client] HTTP error from OpenAI: {status} {resp.text}")
+            raise exc
 
-        except requests.RequestException as exc:
-            # Network-level issues: also retry with backoff
-            print(f"[LLM] Network exception: {exc}")
+        data = resp.json()
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError) as exc:  # pragma: no cover
+            raise RuntimeError(f"Unexpected OpenAI response: {data}") from exc
 
-            if attempt >= max_retries:
-                raise RuntimeError(
-                    f"Exceeded max_retries ({max_retries}) due to network errors"
-                ) from exc
-
-            delay = base_delay_seconds * (2 ** (attempt - 1))
-            delay = min(delay, 60.0)
-            print(f"[LLM] Sleeping {delay:.1f}s before retry after network error...")
-            time.sleep(delay)
+    raise RuntimeError("Exhausted retries calling OpenAI API")
