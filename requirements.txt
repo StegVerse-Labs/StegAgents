@@ -1,2 +1,4 @@
 pyyaml
 requests
+
+stegcore @ git+https://github.com/stegverse-labs/StegCore.git@main
