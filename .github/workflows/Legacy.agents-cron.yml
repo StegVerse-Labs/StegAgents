@@ -1,4 +1,4 @@
-name: StegAgents Runner
+name: StegAgents Runner {Legacy}
 
 on:
   # Manual runs from the Actions tab
