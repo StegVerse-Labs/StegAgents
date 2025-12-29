@@ -43,8 +43,13 @@ jobs:
 
       - name: Install StegID (for minting receipts)
         run: |
-          pip install "stegid @ git+https://github.com/stegverse-labs/StegID.git@main"
-
+          python -m pip install --upgrade pip
+          python -m pip install "stegid @ git+https://github.com/stegverse-labs/StegID.git@main"
+          python - << 'EOF'
+          import stegid
+          print("StegID import OK:", stegid.__file__)
+          EOF
+    
       - name: Mint StegID receipt (ai:run)
         env:
           STEGID_ED25519_PRIVATE_B64: ${{ secrets.STEGID_ED25519_PRIVATE_B64 }}
