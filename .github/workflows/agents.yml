@@ -1,4 +1,4 @@
-name: StegAgents Runner
+name: StegAgents Runner {receipt-gated}
 
 on:
   workflow_dispatch:
