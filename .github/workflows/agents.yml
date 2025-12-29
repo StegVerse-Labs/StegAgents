@@ -1,7 +1,7 @@
-name: StegAgents Runner {receipt-gated}
+name: StegAgents Runner
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   schedule:
     - cron: "0 */12 * * *"
 
@@ -36,20 +36,22 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install repo dependencies
+        run: python -m pip install -r requirements.txt
 
       - name: Install StegID (for minting receipts)
         run: |
-          python -m pip install --upgrade pip
           python -m pip install "stegid @ git+https://github.com/stegverse-labs/StegID.git@main"
           python - << 'EOF'
           import stegid
-          print("StegID import OK:", stegid.__file__)
+          from stegid.receipts import mint_receipt
+          print("stegid import OK:", stegid.__file__)
+          print("mint_receipt import OK")
           EOF
-    
+
       - name: Mint StegID receipt (ai:run)
         env:
           STEGID_ED25519_PRIVATE_B64: ${{ secrets.STEGID_ED25519_PRIVATE_B64 }}
@@ -57,19 +59,21 @@ jobs:
           RECEIPT_JSON="$(python - << 'EOF'
           import os, json
           from stegid.receipts import mint_receipt
+
           priv = os.environ["STEGID_ED25519_PRIVATE_B64"].strip()
+
           r = mint_receipt(
-            priv_b64=priv,
-            actor_class="ai",
-            scopes=["ai:run"],
-            ttl_seconds=900,
-            assurance_level=2,
-            signals=[os.environ.get("AGENT_NAME","")]
+              priv_b64=priv,
+              actor_class="ai",
+              scopes=["ai:run"],
+              ttl_seconds=900,
+              assurance_level=2,
+              signals=[os.environ.get("AGENT_NAME","")]
           )
           print(json.dumps(r.to_dict(), separators=(',',':')))
           EOF
           )"
-          echo "STEGID_VERIFIED_RECEIPT_JSON=$RECEIPT_JSON" >> $GITHUB_ENV
+          echo "STEGID_VERIFIED_RECEIPT_JSON=$RECEIPT_JSON" >> "$GITHUB_ENV"
 
       - name: Run agent
         env:
