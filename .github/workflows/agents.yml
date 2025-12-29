@@ -36,39 +36,57 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
-
-      - name: Install repo dependencies
-        run: python -m pip install -r requirements.txt
-
-      - name: Install StegID (for minting receipts)
+      - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      # --- StegID install (fixed: same interpreter) ---
+      - name: Install StegID (for minting receipts)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "python: $(command -v python)"
+          python -V
+          python -c "import sys; print('sys.executable=', sys.executable)"
+          python -m pip --version
+
           python -m pip install "stegid @ git+https://github.com/stegverse-labs/StegID.git@main"
+
+          # prove import works
           python - << 'EOF'
+          import sys
+          print("sys.executable:", sys.executable)
           import stegid
-          from stegid.receipts import mint_receipt
           print("stegid import OK:", stegid.__file__)
-          print("mint_receipt import OK")
+          from stegid.receipts import mint_receipt, verify_receipt
+          print("receipts imports OK")
           EOF
 
+      # --- Mint receipt for this run ---
       - name: Mint StegID receipt (ai:run)
+        shell: bash
         env:
           STEGID_ED25519_PRIVATE_B64: ${{ secrets.STEGID_ED25519_PRIVATE_B64 }}
         run: |
+          set -euo pipefail
           RECEIPT_JSON="$(python - << 'EOF'
           import os, json
           from stegid.receipts import mint_receipt
 
           priv = os.environ["STEGID_ED25519_PRIVATE_B64"].strip()
+          agent = os.environ.get("AGENT_NAME","").strip()
 
           r = mint_receipt(
-              priv_b64=priv,
-              actor_class="ai",
-              scopes=["ai:run"],
-              ttl_seconds=900,
-              assurance_level=2,
-              signals=[os.environ.get("AGENT_NAME","")]
+            priv_b64=priv,
+            actor_class="ai",
+            scopes=["ai:run"],
+            ttl_seconds=900,
+            assurance_level=2,
+            signals=[agent] if agent else []
           )
           print(json.dumps(r.to_dict(), separators=(',',':')))
           EOF
@@ -76,14 +94,18 @@ jobs:
           echo "STEGID_VERIFIED_RECEIPT_JSON=$RECEIPT_JSON" >> "$GITHUB_ENV"
 
       - name: Run agent
+        shell: bash
         env:
           STEGID_VERIFIED_RECEIPT_JSON: ${{ env.STEGID_VERIFIED_RECEIPT_JSON }}
         run: |
+          set -euo pipefail
           echo "[StegAgents] Running agent: ${AGENT_NAME}"
           python -m src.main
 
       - name: Commit if changed
+        shell: bash
         run: |
+          set -euo pipefail
           if git status --porcelain | grep .; then
             echo "Agent output changed — committing."
             git config user.name "github-actions[bot]"
