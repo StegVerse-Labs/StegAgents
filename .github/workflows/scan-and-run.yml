@@ -1,0 +1,126 @@
+name: scan-and-run
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: "Agent to run (e.g., GrantFinder-001, BookWriter-001)"
+        required: true
+        type: string
+      dry_run:
+        description: "If true, skip agent execution after scan"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  scan_and_run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout StegAgents
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          # Safety: ensure pytest exists if any steps invoke it elsewhere
+          pip install -q pytest || true
+
+      # ------------------------------------------------------------
+      # HARD FAIL SCAN — bans lingering StegID references
+      # IMPORTANT: excludes .github so this workflow doesn't self-match
+      # ------------------------------------------------------------
+      - name: Scan repo for forbidden StegID references (hard fail)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "🔍 Scanning repo (excluding .github/) for forbidden references..."
+
+          # If ripgrep is available, use it (fast + reliable). Otherwise fallback to grep.
+          if command -v rg >/dev/null 2>&1; then
+            # Exclude .github to avoid self-trigger, and exclude .git always.
+            if rg -n -S -i --hidden \
+              --glob '!**/.git/**' \
+              --glob '!**/.github/**' \
+              -e 'stegid' \
+              -e 'stegverse-labs/StegID' \
+              . ; then
+              echo "❌ ERROR: Forbidden references found (see matches above)."
+              exit 1
+            fi
+          else
+            # grep fallback
+            if grep -RInE --exclude-dir=.git --exclude-dir=.github \
+              'stegid|stegverse-labs/StegID' \
+              . ; then
+              echo "❌ ERROR: Forbidden references found (see matches above)."
+              exit 1
+            fi
+          fi
+
+          echo "✅ Scan passed. No forbidden references found."
+
+      # ------------------------------------------------------------
+      # Local receipt injection (NO StegID wording / env names)
+      # This avoids the heredoc bug and avoids StegID strings.
+      # ------------------------------------------------------------
+      - name: Mint local receipt (inline)
+        id: receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RECEIPT_JSON="$(python - <<'PY'
+import json, os, datetime
+agent = os.getenv("INPUT_AGENT", "unknown")
+now = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+receipt = {
+  "issuer": "local",
+  "agent": agent,
+  "issued_at": now,
+  "verified": True,
+  "verifier": "local-receipt",
+  "note": "CI-local receipt; no external receipt authority required."
+}
+print(json.dumps(receipt, separators=(",", ":")))
+PY
+)"
+          echo "receipt_json=$RECEIPT_JSON" >> "$GITHUB_OUTPUT"
+
+          # Export for runtime consumption (your code should read SV_RECEIPT_JSON)
+          echo "SV_RECEIPT_JSON=$RECEIPT_JSON" >> "$GITHUB_ENV"
+
+      - name: Run agent (unless dry-run)
+        if: ${{ inputs.dry_run == false }}
+        env:
+          SV_RECEIPT_JSON: ${{ steps.receipt.outputs.receipt_json }}
+        run: |
+          set -euo pipefail
+          echo "▶️ Running agent: ${{ inputs.agent }}"
+          python -m src.agent_runner --agent "${{ inputs.agent }}"
+
+      - name: Commit if changed
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git config user.name "stegverse-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          git commit -m "agent: run ${{ inputs.agent }} (scan-and-run)"
+          git push
