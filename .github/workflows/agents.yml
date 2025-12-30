@@ -1,21 +1,12 @@
-name: StegAgents Runner (Receipted)
+name: StegAgents Orchestrator
 
 on:
   workflow_dispatch:
-    inputs:
-      agent:
-        description: "Optional: run a single agent (e.g., BookWriter-001). Leave blank to run the full matrix."
-        required: false
-        default: ""
   schedule:
     - cron: "0 */12 * * *"
 
 permissions:
   contents: write
-
-concurrency:
-  group: stegagents-runner
-  cancel-in-progress: false
 
 jobs:
   run-agents:
@@ -26,8 +17,11 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        # If a manual input agent is provided, run ONLY that one; otherwise run the full list.
-        agent: ${{ fromJson(github.event_name == 'workflow_dispatch' && github.event.inputs.agent != '' && format('["{0}"]', github.event.inputs.agent) || '["BookWriter-001","SocialMedia-001","GrantFinder-001","DevOpsGuardian-001"]') }}
+        agent:
+          - BookWriter-001
+          - SocialMedia-001
+          - GrantFinder-001
+          - DevOpsGuardian-001
 
     env:
       AGENT_NAME: ${{ matrix.agent }}
@@ -42,93 +36,68 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
-
       - name: Install dependencies
         run: |
-          if [ -f requirements.txt ]; then
-            python -m pip install -r requirements.txt
-          fi
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      # Install StegID from git (do NOT assume the import name is stegid)
-      - name: Install StegID (for minting receipts)
-        run: |
-          set -euo pipefail
-          python -m pip install "git+https://github.com/stegverse-labs/StegID.git@main"
-
-      # Debug: show what "steg*" modules are actually importable
-      - name: Debug StegID import (list steg* modules)
-        run: |
-          python - << 'PY'
-          import pkgutil
-          mods = sorted([m.name for m in pkgutil.iter_modules() if "steg" in m.name.lower()])
-          print("Discovered modules containing 'steg':")
-          for m in mods:
-            print(" -", m)
-          PY
-
-      - name: Mint StegID receipt (ai:run)
+      # 🔐 Receipt minting (NO StegID import)
+      - name: Mint StegReceipt (inline)
         env:
           STEGID_ED25519_PRIVATE_B64: ${{ secrets.STEGID_ED25519_PRIVATE_B64 }}
         run: |
-          set -euo pipefail
-          RECEIPT_JSON="$(python - << 'PY'
-          import os, json, importlib
+          python << 'EOF'
+          import os, json, base64, hashlib, time
+          from datetime import datetime, timedelta
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+          from cryptography.hazmat.primitives import serialization
 
-          priv = os.environ["STEGID_ED25519_PRIVATE_B64"].strip()
-          agent = os.environ.get("AGENT_NAME","").strip()
+          priv_b64 = os.environ["STEGID_ED25519_PRIVATE_B64"]
+          agent = os.environ.get("AGENT_NAME","")
 
-          # Try common module names in case the package import isn't "stegid"
-          candidates = ["stegid", "steg_id", "stegID", "StegID"]
-          mint_receipt = None
-          last_err = None
-
-          for name in candidates:
-            try:
-              mod = importlib.import_module(name)
-              # receipts submodule
-              receipts = importlib.import_module(f"{name}.receipts")
-              mint_receipt = getattr(receipts, "mint_receipt", None)
-              if mint_receipt:
-                break
-            except Exception as e:
-              last_err = e
-
-          if not mint_receipt:
-            raise RuntimeError(f"Could not import StegID receipts.mint_receipt from any of {candidates}. Last error: {last_err}")
-
-          r = mint_receipt(
-            priv_b64=priv,
-            actor_class="ai",
-            scopes=["ai:run"],
-            ttl_seconds=900,
-            assurance_level=2,
-            signals=[agent] if agent else [],
+          priv = Ed25519PrivateKey.from_private_bytes(
+              base64.b64decode(priv_b64)
           )
 
-          print(json.dumps(r.to_dict(), separators=(',',':')))
-          PY
-          )"
-          echo "STEGID_VERIFIED_RECEIPT_JSON=$RECEIPT_JSON" >> $GITHUB_ENV
+          issued = datetime.utcnow()
+          expires = issued + timedelta(minutes=15)
+
+          payload = {
+              "receipt_id": hashlib.sha256(f"{agent}{issued}".encode()).hexdigest()[:16],
+              "actor_class": "ai",
+              "scopes": ["ai:run"],
+              "issued_at": issued.isoformat() + "Z",
+              "expires_at": expires.isoformat() + "Z",
+              "assurance_level": 2,
+              "signals": [agent],
+          }
+
+          payload_bytes = json.dumps(payload, separators=(",",":")).encode()
+          sig = priv.sign(payload_bytes)
+
+          receipt = {
+              **payload,
+              "issuer": "stegid",
+              "kid": "stegid-ed25519-001",
+              "payload_hash": hashlib.sha256(payload_bytes).hexdigest(),
+              "sig": base64.b64encode(sig).decode(),
+          }
+
+          print("STEGID_VERIFIED_RECEIPT_JSON=" + json.dumps(receipt))
+          EOF >> $GITHUB_ENV
 
       - name: Run agent
-        env:
-          STEGID_VERIFIED_RECEIPT_JSON: ${{ env.STEGID_VERIFIED_RECEIPT_JSON }}
         run: |
-          set -euo pipefail
-          echo "[StegAgents] Running agent: ${AGENT_NAME}"
+          echo "[StegAgents] Running ${AGENT_NAME}"
           python -m src.main
 
       - name: Commit if changed
         run: |
-          set -euo pipefail
           if git status --porcelain | grep .; then
-            echo "Agent output changed — committing."
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add -A
-            git commit -m "Update agent outputs (${AGENT_NAME})"
+            git commit -m "Agent output (${AGENT_NAME})"
             git push
           else
             echo "No changes."
