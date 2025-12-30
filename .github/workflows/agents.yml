@@ -1,7 +1,7 @@
 name: StegAgents Runner
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   schedule:
     - cron: "0 */12 * * *"
 
@@ -37,77 +37,74 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        shell: bash
         run: |
-          set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          pip install -r requirements.txt
 
-      # --- StegID install (fixed: same interpreter) ---
-      - name: Install StegID (for minting receipts)
-        shell: bash
+      # ----------------------------
+      # Install StegID (correctly)
+      # ----------------------------
+      - name: Install StegID
         run: |
-          set -euo pipefail
+          pip install "stegid @ git+https://github.com/stegverse-labs/StegID.git@main"
 
-          echo "python: $(command -v python)"
-          python -V
-          python -c "import sys; print('sys.executable=', sys.executable)"
-          python -m pip --version
-
-          python -m pip install "stegid @ git+https://github.com/stegverse-labs/StegID.git@main"
-
-          # prove import works
+      # ----------------------------
+      # Verify StegID import path
+      # ----------------------------
+      - name: Verify StegID module
+        run: |
           python - << 'EOF'
           import sys
-          print("sys.executable:", sys.executable)
-          import stegid
-          print("stegid import OK:", stegid.__file__)
-          from stegid.receipts import mint_receipt, verify_receipt
-          print("receipts imports OK")
+          print("Python:", sys.executable)
+
+          try:
+              from steg_id.receipts import mint_receipt, verify_receipt
+              print("✅ StegID import OK")
+          except Exception as e:
+              print("❌ StegID import FAILED")
+              raise
           EOF
 
-      # --- Mint receipt for this run ---
+      # ----------------------------
+      # Mint StegID receipt
+      # ----------------------------
       - name: Mint StegID receipt (ai:run)
-        shell: bash
         env:
           STEGID_ED25519_PRIVATE_B64: ${{ secrets.STEGID_ED25519_PRIVATE_B64 }}
         run: |
-          set -euo pipefail
           RECEIPT_JSON="$(python - << 'EOF'
           import os, json
-          from stegid.receipts import mint_receipt
-
-          priv = os.environ["STEGID_ED25519_PRIVATE_B64"].strip()
-          agent = os.environ.get("AGENT_NAME","").strip()
+          from steg_id.receipts import mint_receipt
 
           r = mint_receipt(
-            priv_b64=priv,
-            actor_class="ai",
-            scopes=["ai:run"],
-            ttl_seconds=900,
-            assurance_level=2,
-            signals=[agent] if agent else []
+              priv_b64=os.environ["STEGID_ED25519_PRIVATE_B64"].strip(),
+              actor_class="ai",
+              scopes=["ai:run"],
+              ttl_seconds=900,
+              assurance_level=2,
+              signals=[os.environ.get("AGENT_NAME", "")]
           )
-          print(json.dumps(r.to_dict(), separators=(',',':')))
+
+          print(json.dumps(r.to_dict(), separators=(",", ":")))
           EOF
           )"
-          echo "STEGID_VERIFIED_RECEIPT_JSON=$RECEIPT_JSON" >> "$GITHUB_ENV"
 
+          echo "STEGID_VERIFIED_RECEIPT_JSON=$RECEIPT_JSON" >> $GITHUB_ENV
+
+      # ----------------------------
+      # Run agent
+      # ----------------------------
       - name: Run agent
-        shell: bash
-        env:
-          STEGID_VERIFIED_RECEIPT_JSON: ${{ env.STEGID_VERIFIED_RECEIPT_JSON }}
         run: |
-          set -euo pipefail
           echo "[StegAgents] Running agent: ${AGENT_NAME}"
           python -m src.main
 
+      # ----------------------------
+      # Commit outputs if changed
+      # ----------------------------
       - name: Commit if changed
-        shell: bash
         run: |
-          set -euo pipefail
           if git status --porcelain | grep .; then
-            echo "Agent output changed — committing."
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add -A
