@@ -1,7 +1,12 @@
-name: StegAgents Orchestrator
+name: StegAgents Runner
 
 on:
   workflow_dispatch:
+    inputs:
+      agent:
+        description: "Optional: run only one agent (leave blank to run all)"
+        required: false
+        default: ""
   schedule:
     - cron: "0 */12 * * *"
 
@@ -24,8 +29,10 @@ jobs:
           - DevOpsGuardian-001
 
     env:
-      AGENT_NAME: ${{ matrix.agent }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      STEGID_ED25519_PRIVATE_B64: ${{ secrets.STEGID_ED25519_PRIVATE_B64 }}
+      # kid must exist in public_keys/keys.json (or inject STEGID_PUBLIC_KEYS_JSON)
+      STEGID_KID: ${{ secrets.STEGID_KID }}
 
     steps:
       - name: Checkout StegAgents
@@ -40,64 +47,71 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          # required for src/stegid_receipts.py
+          pip install cryptography
 
-      # 🔐 Receipt minting (NO StegID import)
-      - name: Mint StegReceipt (inline)
-        env:
-          STEGID_ED25519_PRIVATE_B64: ${{ secrets.STEGID_ED25519_PRIVATE_B64 }}
+      - name: Decide whether to skip this matrix entry (manual single-agent run)
+        id: gate
         run: |
-          python << 'EOF'
-          import os, json, base64, hashlib, time
-          from datetime import datetime, timedelta
-          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-          from cryptography.hazmat.primitives import serialization
+          WANT="${{ github.event.inputs.agent }}"
+          CUR="${{ matrix.agent }}"
+          if [ -n "$WANT" ] && [ "$WANT" != "$CUR" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
 
-          priv_b64 = os.environ["STEGID_ED25519_PRIVATE_B64"]
-          agent = os.environ.get("AGENT_NAME","")
+      - name: Mint receipt (ai:run)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          python - <<'PY'
+          import os, json
+          from src.stegid_receipts import mint_receipt
 
-          priv = Ed25519PrivateKey.from_private_bytes(
-              base64.b64decode(priv_b64)
+          priv = os.environ["STEGID_ED25519_PRIVATE_B64"].strip()
+          kid = (os.environ.get("STEGID_KID") or "local-ed25519-1").strip()
+          agent = "${{ matrix.agent }}"
+
+          r = mint_receipt(
+              priv_b64=priv,
+              actor_class="ai",
+              scopes=["ai:run"],
+              ttl_seconds=900,
+              assurance_level=2,
+              signals=[agent],
+              kid=kid,
           )
-
-          issued = datetime.utcnow()
-          expires = issued + timedelta(minutes=15)
-
-          payload = {
-              "receipt_id": hashlib.sha256(f"{agent}{issued}".encode()).hexdigest()[:16],
-              "actor_class": "ai",
-              "scopes": ["ai:run"],
-              "issued_at": issued.isoformat() + "Z",
-              "expires_at": expires.isoformat() + "Z",
-              "assurance_level": 2,
-              "signals": [agent],
-          }
-
-          payload_bytes = json.dumps(payload, separators=(",",":")).encode()
-          sig = priv.sign(payload_bytes)
-
-          receipt = {
-              **payload,
-              "issuer": "stegid",
-              "kid": "stegid-ed25519-001",
-              "payload_hash": hashlib.sha256(payload_bytes).hexdigest(),
-              "sig": base64.b64encode(sig).decode(),
-          }
-
-          print("STEGID_VERIFIED_RECEIPT_JSON=" + json.dumps(receipt))
-          EOF >> $GITHUB_ENV
+          print("STEGID_VERIFIED_RECEIPT_JSON=" + json.dumps(r.to_dict(), separators=(",",":")))
+          PY
+          python - <<'PY' >> $GITHUB_ENV
+          import os, json
+          from src.stegid_receipts import mint_receipt
+          priv = os.environ["STEGID_ED25519_PRIVATE_B64"].strip()
+          kid = (os.environ.get("STEGID_KID") or "local-ed25519-1").strip()
+          agent = "${{ matrix.agent }}"
+          r = mint_receipt(priv_b64=priv, actor_class="ai", scopes=["ai:run"], ttl_seconds=900, assurance_level=2, signals=[agent], kid=kid)
+          import json as _j
+          print("STEGID_VERIFIED_RECEIPT_JSON=" + _j.dumps(r.to_dict(), separators=(",",":")))
+          PY
 
       - name: Run agent
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          AGENT_NAME: ${{ matrix.agent }}
+          STEGID_VERIFIED_RECEIPT_JSON: ${{ env.STEGID_VERIFIED_RECEIPT_JSON }}
         run: |
-          echo "[StegAgents] Running ${AGENT_NAME}"
+          echo "[StegAgents] Running agent: ${AGENT_NAME}"
           python -m src.main
 
       - name: Commit if changed
+        if: steps.gate.outputs.skip != 'true'
         run: |
           if git status --porcelain | grep .; then
+            echo "Agent output changed — committing."
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add -A
-            git commit -m "Agent output (${AGENT_NAME})"
+            git commit -m "Update agent outputs (${{ matrix.agent }})"
             git push
           else
             echo "No changes."
