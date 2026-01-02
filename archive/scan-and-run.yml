@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: "If true, skip agent execution after scan"
+        description: "If true, skip agent execution and commit"
         required: false
         default: false
         type: boolean
@@ -21,9 +21,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout StegAgents
+      # ------------------------------------------------------------
+      # Checkout
+      # ------------------------------------------------------------
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ------------------------------------------------------------
+      # Python setup
+      # ------------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -39,12 +45,20 @@ jobs:
           fi
           python -m pip install -q pytest || true
 
-      - name: Scan repo for forbidden external dependency usage (hard fail)
+      # ------------------------------------------------------------
+      # HARD FAIL SCAN
+      # Enforces: no external StegID dependency usage
+      # ------------------------------------------------------------
+      - name: Scan repo for forbidden external dependency usage
+        shell: bash
         run: |
           set -euo pipefail
           python scripts/scan_no_stegid.py
 
-      - name: Mint local receipt (inline)
+      # ------------------------------------------------------------
+      # Local receipt minting (no external authority)
+      # ------------------------------------------------------------
+      - name: Mint local receipt
         id: receipt
         shell: bash
         env:
@@ -67,10 +81,13 @@ receipt = {
 print(json.dumps(receipt, separators=(",", ":")))
 PY
 )"
-          printf '%s\n' "receipt_json=$RECEIPT_JSON" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "SV_RECEIPT_JSON=$RECEIPT_JSON" >> "$GITHUB_ENV"
+          echo "receipt_json=$RECEIPT_JSON" >> "$GITHUB_OUTPUT"
+          echo "SV_RECEIPT_JSON=$RECEIPT_JSON" >> "$GITHUB_ENV"
 
-      - name: Run agent (unless dry-run)
+      # ------------------------------------------------------------
+      # Run agent
+      # ------------------------------------------------------------
+      - name: Run agent
         if: ${{ inputs.dry_run == false }}
         env:
           SV_RECEIPT_JSON: ${{ steps.receipt.outputs.receipt_json }}
@@ -79,7 +96,10 @@ PY
           echo "▶️ Running agent: ${{ inputs.agent }}"
           python -m src.agent_runner --agent "${{ inputs.agent }}"
 
-      - name: Commit if changed
+      # ------------------------------------------------------------
+      # Commit results if anything changed
+      # ------------------------------------------------------------
+      - name: Commit changes
         if: ${{ inputs.dry_run == false }}
         run: |
           set -euo pipefail
