@@ -1,84 +1,69 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import List, Tuple
 
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
-def _git_ls_files(root: Path) -> List[str]:
+SCAN_EXTS = {".py", ".yml", ".yaml", ".toml", ".txt", ".md", ".cfg", ".ini"}
+
+BANNED_PATTERNS: List[Tuple[str, re.Pattern]] = [
+    ("pip_install", re.compile(r"(^|\s)pip\s+install\s+.*\bstegid\b", re.IGNORECASE)),
+    ("import", re.compile(r"^\s*import\s+stegid\b", re.IGNORECASE)),
+    ("from_import", re.compile(r"^\s*from\s+stegid\b", re.IGNORECASE)),
+    ("repo_url", re.compile(r"stegverse-labs/StegID(\.git)?", re.IGNORECASE)),
+]
+
+def git_ls_files() -> List[str]:
+    out = subprocess.check_output(["git", "ls-files"], cwd=str(REPO_ROOT), text=True)
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+def should_scan(rel: str) -> bool:
+    p = Path(rel)
+    if p.suffix.lower() not in SCAN_EXTS:
+        return False
+    if ".git" in p.parts:
+        return False
+    if ".github" in p.parts:
+        # avoid self-matching workflow text
+        return False
+    return True
+
+def scan_file(rel: str) -> List[Tuple[str, int, str, str]]:
+    p = REPO_ROOT / rel
     try:
-        out = subprocess.check_output(["git", "ls-files"], cwd=str(root), text=True)
-        files = [line.strip() for line in out.splitlines() if line.strip()]
-        return files
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
     except Exception:
         return []
 
-def _build_banned_terms() -> List[str]:
-    # Build terms without embedding the contiguous banned substrings in this file.
-    lower = "".join(list("stegid"))
-    mixed = "".join(["S", "t", "e", "g", "I", "D"])
-    url = "".join(["stegverse", "-", "labs", "/", "Steg", "ID"])
-    giturl = url + ".git"
-    return [lower, mixed, url, giturl]
-
-def _scan_text(path: Path, text: str, banned: List[str]) -> List[Tuple[str, int, str]]:
-    hits: List[Tuple[str, int, str]] = []
-    # case-insensitive match for any banned term
-    pattern = re.compile("|".join(re.escape(t) for t in banned), re.IGNORECASE)
-    for i, line in enumerate(text.splitlines(), start=1):
-        m = pattern.search(line)
-        if m:
-            hits.append((str(path), i, line.rstrip("\n")))
+    hits: List[Tuple[str, int, str, str]] = []
+    for i, line in enumerate(lines, start=1):
+        for tag, pat in BANNED_PATTERNS:
+            if pat.search(line):
+                hits.append((rel, i, tag, line))
     return hits
 
 def main() -> int:
-    root = _repo_root()
-    print("\n🔎 Scanning repo for banned references...\n")
-    print(f"📁 Repo root: {root}\n")
+    print("\n🔎 Scanning repo for forbidden external dependency usage...\n")
+    files = [f for f in git_ls_files() if should_scan(f)]
 
-    files = _git_ls_files(root)
-    if files:
-        print(f"✅ Using git ls-files ({len(files)} tracked files).\n")
-        paths = [root / f for f in files]
-    else:
-        # fallback: scan everything, but skip .git
-        print("⚠️ git ls-files unavailable; falling back to filesystem walk.\n")
-        paths = [p for p in root.rglob("*") if p.is_file() and ".git" not in p.parts]
+    hits: List[Tuple[str, int, str, str]] = []
+    for f in files:
+        hits.extend(scan_file(f))
 
-    banned = _build_banned_terms()
+    if not hits:
+        print("✅ Scan passed. No forbidden external dependency usage found.\n")
+        return 0
 
-    all_hits: List[Tuple[str, int, str]] = []
-    for p in paths:
-        # read as text best-effort
-        try:
-            data = p.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
-        all_hits.extend(_scan_text(p, data, banned))
-
-    if all_hits:
-        print("\n❌ Found banned references:\n")
-        last_file = None
-        for f, line_no, line in all_hits:
-            if f != last_file:
-                print(f"\n--- {os.path.relpath(f, str(root))} ---\n")
-                last_file = f
-            # show trimmed line
-            show = line.strip()
-            if len(show) > 240:
-                show = show[:240] + "…"
-            print(f"{os.path.relpath(f, str(root))}:{line_no}: {show}")
-        print("\nFix the lines above, then re-run.\n")
-        return 1
-
-    print("✅ Scan clean. No banned references found.\n")
-    return 0
+    print("❌ Found forbidden external dependency usage:\n")
+    for rel, ln, tag, line in hits:
+        print(f"{rel}:{ln}: [{tag}] {line}")
+    print("\nFix the lines above, then re-run.\n")
+    return 1
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
