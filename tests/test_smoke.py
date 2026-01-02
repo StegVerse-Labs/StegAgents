@@ -1,8 +1,9 @@
 def test_repo_imports():
-    import src.agent_runner  # verifies import graph
+    import src.agent_runner
 
 
-def test_receipt_verify_local():
+def test_local_receipt_verifier():
     from src.receipt_verify import verify_receipt
     receipt = {"issuer": "local", "verified": True}
-    assert isinstance(verify_receipt(receipt), dict)
+    out = verify_receipt(receipt)
+    assert isinstance(out, dict)
