@@ -1,4 +1,4 @@
-name: scan-and-run
+name: Scan and Run
 
 on:
   workflow_dispatch:
@@ -19,17 +19,10 @@ permissions:
 jobs:
   scan_and_run:
     runs-on: ubuntu-latest
-
     steps:
-      # ------------------------------------------------------------
-      # Checkout
-      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------
-      # Python setup
-      # ------------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -45,19 +38,11 @@ jobs:
           fi
           python -m pip install -q pytest || true
 
-      # ------------------------------------------------------------
-      # HARD FAIL SCAN
-      # Enforces: no external StegID dependency usage
-      # ------------------------------------------------------------
       - name: Scan repo for forbidden external dependency usage
-        shell: bash
         run: |
           set -euo pipefail
           python scripts/scan_no_stegid.py
 
-      # ------------------------------------------------------------
-      # Local receipt minting (no external authority)
-      # ------------------------------------------------------------
       - name: Mint local receipt
         id: receipt
         shell: bash
@@ -65,7 +50,6 @@ jobs:
           SV_AGENT: ${{ inputs.agent }}
         run: |
           set -euo pipefail
-
           RECEIPT_JSON="$(python - <<'PY'
 import json, os, datetime
 agent = os.getenv("SV_AGENT", "unknown")
@@ -84,9 +68,6 @@ PY
           echo "receipt_json=$RECEIPT_JSON" >> "$GITHUB_OUTPUT"
           echo "SV_RECEIPT_JSON=$RECEIPT_JSON" >> "$GITHUB_ENV"
 
-      # ------------------------------------------------------------
-      # Run agent
-      # ------------------------------------------------------------
       - name: Run agent
         if: ${{ inputs.dry_run == false }}
         env:
@@ -96,9 +77,6 @@ PY
           echo "▶️ Running agent: ${{ inputs.agent }}"
           python -m src.agent_runner --agent "${{ inputs.agent }}"
 
-      # ------------------------------------------------------------
-      # Commit results if anything changed
-      # ------------------------------------------------------------
       - name: Commit changes
         if: ${{ inputs.dry_run == false }}
         run: |
