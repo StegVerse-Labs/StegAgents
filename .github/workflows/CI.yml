@@ -29,12 +29,12 @@ jobs:
       - name: Install package + pytest
         run: |
           if [ -f pyproject.toml ]; then
-            pip install -e . || true
+            pip install -e .
           fi
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
-          pip install pytest
+          pip install -q pytest
 
       - name: Run tests
         run: pytest -q
