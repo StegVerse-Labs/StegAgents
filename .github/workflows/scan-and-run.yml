@@ -39,38 +39,10 @@ jobs:
           fi
           python -m pip install -q pytest || true
 
-      # ------------------------------------------------------------
-      # HARD FAIL SCAN — bans real StegID dependency signals
-      # (imports + repo URL), not the substring "stegid" everywhere.
-      # Excludes .github so the workflow doesn't self-match.
-      # ------------------------------------------------------------
-      - name: Scan repo for forbidden StegID dependency references (hard fail)
-        shell: bash
+      - name: Scan repo for forbidden external dependency usage (hard fail)
         run: |
           set -euo pipefail
-          echo "🔍 Scanning repo (excluding .github/) for forbidden StegID dependency references..."
-
-          PATTERN='(^[[:space:]]*import[[:space:]]+stegid\b|^[[:space:]]*from[[:space:]]+stegid\b|stegverse-labs/StegID|StegID\.git)'
-
-          if command -v rg >/dev/null 2>&1; then
-            if rg -n -S -i --hidden \
-              --glob '!**/.git/**' \
-              --glob '!**/.github/**' \
-              -e "$PATTERN" \
-              . ; then
-              echo "❌ ERROR: Forbidden StegID dependency references found (see matches above)."
-              exit 1
-            fi
-          else
-            if grep -RInE --exclude-dir=.git --exclude-dir=.github \
-              "$PATTERN" \
-              . ; then
-              echo "❌ ERROR: Forbidden StegID dependency references found (see matches above)."
-              exit 1
-            fi
-          fi
-
-          echo "✅ Scan passed. No forbidden StegID dependency references found."
+          python scripts/scan_no_stegid.py
 
       - name: Mint local receipt (inline)
         id: receipt
