@@ -15,25 +15,15 @@ class StegCoreDenied(RuntimeError):
 
 
 def _parse_dt(s: str) -> datetime:
-    # Accept "2025-12-27T01:02:03Z" and offsets
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
 def load_verified_receipt_from_env() -> Optional[VerifiedReceipt]:
     """
-    v0 receipt injection until StegID is wired.
-    Set STEGID_VERIFIED_RECEIPT_JSON to a JSON object like:
-    {
-      "receipt_id": "...",
-      "actor_class": "ai",
-      "scopes": ["ai:run", "ops:write"],
-      "issued_at": "2025-12-27T00:00:00Z",
-      "expires_at": "2025-12-27T00:15:00Z",
-      "assurance_level": 2,
-      "signals": []
-    }
+    Load verified receipt from:
+      SV_RECEIPT_JSON
     """
-    raw = os.getenv("STEGID_VERIFIED_RECEIPT_JSON", "").strip()
+    raw = os.getenv("SV_RECEIPT_JSON", "").strip()
     if not raw:
         return None
 
@@ -66,9 +56,6 @@ def require_allowed(
     )
 
     d = decide(receipt, intent)
-
-    # Safe default: missing/expired/mismatch => DENY/DEFER
     if d.verdict != "ALLOW":
         raise StegCoreDenied(d)
-
     return d
