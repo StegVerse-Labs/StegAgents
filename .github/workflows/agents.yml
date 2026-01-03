@@ -1,20 +1,20 @@
-name: run-agents
+name: run-agent
 
 on:
   workflow_dispatch:
     inputs:
       agent:
-        description: "Agent to run (e.g., GrantFinder-001, BookWriter-001)"
+        description: "Agent to run"
         required: true
         type: string
       dry_run:
-        description: "If true, scan only (do not execute agent)"
+        description: "Dry run"
         required: false
         default: false
         type: boolean
 
 jobs:
-  run-agent:
+  run:
     uses: ./.github/workflows/scan-and-run.yml
     with:
       agent: ${{ inputs.agent }}
