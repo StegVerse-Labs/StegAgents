@@ -1,4 +1,4 @@
-name: agents
+name: run-agents
 
 on:
   workflow_dispatch:
@@ -8,16 +8,13 @@ on:
         required: true
         type: string
       dry_run:
-        description: "If true, skip agent execution and commit"
+        description: "If true, scan only (do not execute agent)"
         required: false
         default: false
         type: boolean
 
-permissions:
-  contents: write
-
 jobs:
-  call-scan-and-run:
+  run-agent:
     uses: ./.github/workflows/scan-and-run.yml
     with:
       agent: ${{ inputs.agent }}
