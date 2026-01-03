@@ -21,16 +21,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
+      - run: python -m pip install --upgrade pip
 
       - name: Install dependencies
         run: |
@@ -39,32 +36,16 @@ jobs:
           fi
 
       - name: Scan repo for forbidden StegID references
-        run: |
-          set -euo pipefail
-          python scripts/scan_no_stegid.py
+        run: python scripts/scan_no_stegid.py
 
       - name: Mint local receipt
-        id: receipt
-        shell: bash
         env:
           SV_AGENT: ${{ inputs.agent }}
-        run: |
-          python - <<'PY'
-import json, os, datetime
-receipt = {
-  "issuer": "local",
-  "agent": os.environ.get("SV_AGENT"),
-  "issued_at": datetime.datetime.utcnow().isoformat() + "Z",
-  "verified": True,
-  "verifier": "local"
-}
-print(json.dumps(receipt))
-PY
+        run: python scripts/mint_local_receipt.py > receipt.json
 
       - name: Run agent
         if: ${{ inputs.dry_run == false }}
-        run: |
-          python -m src.agent_runner --agent "${{ inputs.agent }}"
+        run: python -m src.agent_runner --agent "${{ inputs.agent }}"
 
       - name: Commit changes
         if: ${{ inputs.dry_run == false }}
