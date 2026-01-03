@@ -1,3 +1,4 @@
+# src/models.py
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -14,16 +15,36 @@ class AgentConfig:
     output_dir: str
 
 
-@dataclass
+@dataclass(init=False)
 class ActionIntent:
     """
-    A lightweight intent envelope for agent actions.
+    Flexible intent container.
 
-    `metadata` is optional and defaults to {} so callers can safely pass
-    extra context without breaking older constructors.
+    Key point: this class MUST accept `metadata=` because the runner passes it.
+    Also: any extra kwargs are captured (and will not crash the workflow).
     """
-    agent: str
-    action: str
-    message: str = ""
-    output_dir: Optional[str] = None
+
+    name: str
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __init__(
+        self,
+        name: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
+        self.name = name
+        self.metadata = dict(metadata or {})
+
+        # absorb any unexpected fields safely
+        for k, v in kwargs.items():
+            self.metadata[k] = v
+
+        # optional convenience: expose keys as attributes too
+        # (won't overwrite existing attrs like 'name'/'metadata')
+        for k, v in self.metadata.items():
+            if not hasattr(self, k):
+                setattr(self, k, v)
+
+
+__all__ = ["AgentConfig", "ActionIntent"]
