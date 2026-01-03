@@ -1,6 +1,24 @@
-name: Scan and Run
+name: scan-and-run
 
 on:
+  # Reusable workflow support (called by other workflows)
+  workflow_call:
+    inputs:
+      agent:
+        description: "Agent to run (e.g., GrantFinder-001, BookWriter-001)"
+        required: true
+        type: string
+      dry_run:
+        description: "If true, skip agent execution and commit"
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      receipt_json:
+        description: "Minted receipt JSON"
+        value: ${{ jobs.scan_and_run.outputs.receipt_json }}
+
+  # Optional: allow running it directly from Actions tab too
   workflow_dispatch:
     inputs:
       agent:
@@ -13,34 +31,18 @@ on:
         default: false
         type: boolean
 
-  # Makes this workflow callable from other workflows (so no more copy/paste)
-  workflow_call:
-    inputs:
-      agent:
-        required: true
-        type: string
-      dry_run:
-        required: false
-        type: boolean
-        default: false
-
 permissions:
   contents: write
-
-concurrency:
-  group: scan-and-run-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
   scan_and_run:
     runs-on: ubuntu-latest
+    outputs:
+      receipt_json: ${{ steps.receipt.outputs.receipt_json }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -50,57 +52,27 @@ jobs:
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
-      - name: Install dependencies (best effort)
+      - name: Install dependencies
         run: |
-          set -euo pipefail
           if [ -f requirements.txt ]; then
             python -m pip install -r requirements.txt
           fi
           python -m pip install -q pytest || true
 
-      - name: Scan repo for banned references (hard fail)
+      - name: Scan repo for forbidden external dependency usage
         run: |
           set -euo pipefail
+          python scripts/scan_no_stegid.py
 
-          if [ -f scripts/scan_no_stegid.py ]; then
-            python scripts/scan_no_stegid.py
-          elif [ -f archives/scan_no_stegid.py ]; then
-            echo "::warning::scan_no_stegid.py is in /archives (should be /scripts). Running it anyway for now."
-            python archives/scan_no_stegid.py
-          elif [ -f archive/scan_no_stegid.py ]; then
-            echo "::warning::scan_no_stegid.py is in /archive (should be /scripts). Running it anyway for now."
-            python archive/scan_no_stegid.py
-          else
-            echo "::error::Missing scan script. Expected scripts/scan_no_stegid.py"
-            exit 2
-          fi
-
-      - name: Mint local receipt (inline)
+      - name: Mint local receipt
         id: receipt
-        shell: bash
         env:
           SV_AGENT: ${{ inputs.agent }}
         run: |
           set -euo pipefail
-          RECEIPT_JSON="$(python - <<'PY'
-import json, os, datetime
-agent = os.getenv("SV_AGENT", "unknown")
-now = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-receipt = {
-  "issuer": "local",
-  "agent": agent,
-  "issued_at": now,
-  "verified": True,
-  "verifier": "local-receipt",
-  "note": "CI-local receipt; no external authority required."
-}
-print(json.dumps(receipt, separators=(",", ":")))
-PY
-)"
-          echo "receipt_json=$RECEIPT_JSON" >> "$GITHUB_OUTPUT"
-          echo "SV_RECEIPT_JSON=$RECEIPT_JSON" >> "$GITHUB_ENV"
+          python scripts/mint_receipt.py
 
-      - name: Run agent (unless dry-run)
+      - name: Run agent
         if: ${{ inputs.dry_run == false }}
         env:
           SV_RECEIPT_JSON: ${{ steps.receipt.outputs.receipt_json }}
@@ -109,7 +81,7 @@ PY
           echo "▶️ Running agent: ${{ inputs.agent }}"
           python -m src.agent_runner --agent "${{ inputs.agent }}"
 
-      - name: Commit if changed (unless dry-run)
+      - name: Commit changes
         if: ${{ inputs.dry_run == false }}
         run: |
           set -euo pipefail
