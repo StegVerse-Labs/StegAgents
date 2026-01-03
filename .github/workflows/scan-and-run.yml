@@ -1,7 +1,6 @@
 name: scan-and-run
 
 on:
-  # Reusable workflow (called by .github/workflows/agents.yml)
   workflow_call:
     inputs:
       agent:
@@ -11,8 +10,8 @@ on:
       dry_run:
         description: "If true, skip agent execution after scan"
         required: false
-        type: boolean
         default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -22,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -33,69 +32,63 @@ jobs:
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
-      - name: Install deps (optional)
+      - name: Install dependencies
         run: |
-          set -euo pipefail
           if [ -f requirements.txt ]; then
-            python -m pip install -r requirements.txt
+            pip install -r requirements.txt
           fi
 
-      - name: Scan repo for forbidden external dependency usage (hard fail)
+      - name: Scan repo for forbidden StegID references
         run: |
           set -euo pipefail
 
-          if [ ! -f scripts/scan_no_stegid.py ]; then
-            echo "ERROR: scripts/scan_no_stegid.py not found"
-            echo "Repo structure (maxdepth=4):"
-            find . -maxdepth 4 -type f | sed 's|^\./||'
+          if [ -f scripts/scan_no_stegid.py ]; then
+            python scripts/scan_no_stegid.py
+          elif [ -f scripts/_impl/scan_no_stegid.py ]; then
+            python scripts/_impl/scan_no_stegid.py
+          elif [ -f archives/scan_no_stegid.py ]; then
+            python archives/scan_no_stegid.py
+          else
+            echo "ERROR: scan_no_stegid.py not found in known locations."
             exit 2
           fi
 
-          python scripts/scan_no_stegid.py
-
-      - name: Mint local receipt (inline)
+      - name: Mint local receipt
         id: receipt
-        shell: bash
         env:
           SV_AGENT: ${{ inputs.agent }}
         run: |
-          set -euo pipefail
+          python - <<'PY'
+          import json, os, datetime
 
-          RECEIPT_JSON="$(python - <<'PY'
-import json, os, datetime
-agent = os.getenv("SV_AGENT", "unknown")
-now = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-receipt = {
-  "issuer": "local",
-  "agent": agent,
-  "issued_at": now,
-  "verified": True,
-  "verifier": "local-receipt",
-  "note": "CI-local receipt; no external authority required."
-}
-print(json.dumps(receipt, separators=(",", ":")))
-PY
-)"
-          echo "receipt_json=$RECEIPT_JSON" >> "$GITHUB_OUTPUT"
-          echo "SV_RECEIPT_JSON=$RECEIPT_JSON" >> "$GITHUB_ENV"
+          receipt = {
+              "issuer": "local",
+              "agent": os.environ.get("SV_AGENT", "unknown"),
+              "issued_at": datetime.datetime.utcnow().isoformat() + "Z",
+              "verified": True,
+              "verifier": "local-receipt",
+              "note": "CI-local receipt; no external authority required."
+          }
 
-      - name: Run agent (unless dry-run)
+          print(json.dumps(receipt))
+          PY
+
+      - name: Run agent
         if: ${{ inputs.dry_run == false }}
         env:
-          SV_RECEIPT_JSON: ${{ steps.receipt.outputs.receipt_json }}
+          SV_AGENT: ${{ inputs.agent }}
         run: |
-          set -euo pipefail
-          echo "▶️ Running agent: ${{ inputs.agent }}"
-          python -m src.agent_runner --agent "${{ inputs.agent }}"
+          echo "▶ Running agent: ${SV_AGENT}"
+          python -m src.agent_runner --agent "${SV_AGENT}"
 
-      - name: Commit if changed (unless dry-run)
+      - name: Commit changes
         if: ${{ inputs.dry_run == false }}
         run: |
-          set -euo pipefail
           if git diff --quiet; then
             echo "No changes to commit."
             exit 0
           fi
+
           git config user.name "stegverse-bot"
           git config user.email "bot@users.noreply.github.com"
           git add -A
