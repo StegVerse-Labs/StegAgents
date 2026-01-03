@@ -4,11 +4,11 @@ on:
   workflow_call:
     inputs:
       agent:
-        description: "Agent to run (e.g., GrantFinder-001, BookWriter-001)"
+        description: "Agent to run"
         required: true
         type: string
       dry_run:
-        description: "If true, skip agent execution after scan"
+        description: "Skip agent execution after scan"
         required: false
         default: false
         type: boolean
@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -35,51 +35,36 @@ jobs:
       - name: Install dependencies
         run: |
           if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
+            python -m pip install -r requirements.txt
           fi
 
       - name: Scan repo for forbidden StegID references
         run: |
           set -euo pipefail
-
-          if [ -f scripts/scan_no_stegid.py ]; then
-            python scripts/scan_no_stegid.py
-          elif [ -f scripts/_impl/scan_no_stegid.py ]; then
-            python scripts/_impl/scan_no_stegid.py
-          elif [ -f archives/scan_no_stegid.py ]; then
-            python archives/scan_no_stegid.py
-          else
-            echo "ERROR: scan_no_stegid.py not found in known locations."
-            exit 2
-          fi
+          python scripts/scan_no_stegid.py
 
       - name: Mint local receipt
         id: receipt
+        shell: bash
         env:
           SV_AGENT: ${{ inputs.agent }}
         run: |
           python - <<'PY'
-          import json, os, datetime
-
-          receipt = {
-              "issuer": "local",
-              "agent": os.environ.get("SV_AGENT", "unknown"),
-              "issued_at": datetime.datetime.utcnow().isoformat() + "Z",
-              "verified": True,
-              "verifier": "local-receipt",
-              "note": "CI-local receipt; no external authority required."
-          }
-
-          print(json.dumps(receipt))
-          PY
+import json, os, datetime
+receipt = {
+  "issuer": "local",
+  "agent": os.environ.get("SV_AGENT"),
+  "issued_at": datetime.datetime.utcnow().isoformat() + "Z",
+  "verified": True,
+  "verifier": "local"
+}
+print(json.dumps(receipt))
+PY
 
       - name: Run agent
         if: ${{ inputs.dry_run == false }}
-        env:
-          SV_AGENT: ${{ inputs.agent }}
         run: |
-          echo "▶ Running agent: ${SV_AGENT}"
-          python -m src.agent_runner --agent "${SV_AGENT}"
+          python -m src.agent_runner --agent "${{ inputs.agent }}"
 
       - name: Commit changes
         if: ${{ inputs.dry_run == false }}
@@ -88,7 +73,6 @@ jobs:
             echo "No changes to commit."
             exit 0
           fi
-
           git config user.name "stegverse-bot"
           git config user.email "bot@users.noreply.github.com"
           git add -A
