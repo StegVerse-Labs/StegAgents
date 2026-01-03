@@ -1,0 +1,24 @@
+name: Agents
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: "Agent to run (e.g., GrantFinder-001, BookWriter-001)"
+        required: true
+        type: string
+      dry_run:
+        description: "If true, skip agent execution and commit"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    uses: ./.github/workflows/scan-and-run.yml
+    with:
+      agent: ${{ inputs.agent }}
+      dry_run: ${{ inputs.dry_run }}
