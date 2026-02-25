@@ -1,21 +1,68 @@
-name: run-agent
+name: StegAgents Runner
 
 on:
   workflow_dispatch:
     inputs:
       agent:
-        description: "Agent to run"
+        description: "Agent name from registry (e.g., GrantFinder-001)"
         required: true
-        type: string
-      dry_run:
-        description: "Dry run"
-        required: false
-        default: false
-        type: boolean
+        default: "GrantFinder-001"
+  schedule:
+    - cron: "15 9 * * *" # daily 09:15 UTC
 
 jobs:
   run:
-    uses: ./.github/workflows/scan-and-run.yml
-    with:
-      agent: ${{ inputs.agent }}
-      dry_run: ${{ inputs.dry_run }}
+    runs-on: ubuntu-latest
+    env:
+      HOST_PLATFORM: github
+      WARRANT_ISSUER: tv.warrant.github.ci
+      WARRANT_PUBLIC_KEY_ID: tv.warrant.github.ci.ed25519.001
+      WARRANT_MODULE: StegVerse-Labs/StegAgents
+      WARRANT_TTL_SECONDS: "600"
+      STEGVERSE_POLICY_MODE: strict
+
+      # Pinning: set as a secret or variable in repo settings.
+      TV_POLICY_BUNDLE_SHA256: ${{ secrets.TV_POLICY_BUNDLE_SHA256 }}
+      TV_WARRANT_ISSUER_PUBKEY_B64: ${{ secrets.TV_WARRANT_ISSUER_PUBKEY_B64 }}
+
+      WARRANT_ED25519_PRIVATE_B64: ${{ secrets.WARRANT_ED25519_PRIVATE_B64 }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set AGENT_NAME
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "AGENT_NAME=${{ inputs.agent }}" >> $GITHUB_ENV
+          else
+            echo "AGENT_NAME=GrantFinder-001" >> $GITHUB_ENV
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Mint Execution Warrant
+        id: mint
+        run: |
+          python scripts/mint_warrant.py > /tmp/warrant.json
+          echo "STEGVERSE_WARRANT_JSON<<EOF" >> $GITHUB_ENV
+          cat /tmp/warrant.json >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Run agent
+        run: |
+          python -m src.main "${AGENT_NAME}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: stegagents_out
+          path: out/
