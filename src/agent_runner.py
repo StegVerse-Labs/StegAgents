@@ -1,223 +1,175 @@
-from __future__ import annotations
-
 import argparse
 import importlib
 import json
 import os
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Callable
+from typing import Any, Callable, Dict
 
-# ✅ NO stegid / StegID imports anywhere.
-# Local receipt verifier (vendored)
-from .receipt_verify import verify_receipt
+from .models import ActionIntent
+from .warrant_verify import verify_warrant
 
-# Optional: if StegCore exists, keep it (not banned)
-try:
-    from stegcore import decide, ActionIntent  # type: ignore
-except Exception:
-    decide = None
-    ActionIntent = None
-
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = REPO_ROOT / "research" / "out"
+OUT_DIR = Path("out")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 @dataclass
 class RunContext:
     agent_name: str
-    out_dir: Path
-    receipt: Dict[str, Any]
-    env: Dict[str, str]
-
-
-def _load_receipt_from_env() -> Dict[str, Any]:
-    """
-    Workflow sets SV_RECEIPT_JSON. If absent, create a local receipt.
-    IMPORTANT: avoids banned strings and avoids external dependencies.
-    """
-    raw = (os.getenv("SV_RECEIPT_JSON") or "").strip()
-    if raw:
-        try:
-            return json.loads(raw)
-        except Exception as e:
-            # Fall back to local receipt if malformed
-            return {
-                "issuer": "local",
-                "verified": True,
-                "verifier": "local-receipt",
-                "issued_at": utc_now_iso(),
-                "note": f"Malformed SV_RECEIPT_JSON ignored: {e.__class__.__name__}",
-            }
-
-    # Default local receipt
-    return {
-        "issuer": "local",
-        "verified": True,
-        "verifier": "local-receipt",
-        "issued_at": utc_now_iso(),
-        "note": "No SV_RECEIPT_JSON provided; default local receipt used.",
-    }
+    receipt: Dict[str, Any]  # kept name for compatibility; now holds the warrant
+    metadata: Dict[str, Any]
 
 
 def _agent_module_candidates(agent: str) -> list[str]:
-    """
-    Robust import candidates so you don't have to match one structure.
-    Examples it will try:
-      - src.agents.GrantFinder_001
-      - src.agents.GrantFinder-001  (normalized)
-      - src.agents.grantfinder_001
-      - src.agents.GrantFinder_001.main
-      - src.agents.grantfinder_001.main
-      - src.agents.grantfinder.main
-    """
     normalized = agent.replace("-", "_")
     lowerish = normalized.lower()
 
-    bases = [
+    stripped = normalized
+    while stripped and stripped[0].isdigit():
+        stripped = stripped[1:]
+    stripped = stripped.strip("_") or normalized
+
+    return [
         f"src.agents.{normalized}",
         f"src.agents.{lowerish}",
         f"src.agents.{normalized}.main",
         f"src.agents.{lowerish}.main",
-        f"src.{normalized}",
-        f"src.{lowerish}",
-    ]
-
-    # Also try stripping common suffix patterns like -001 / _001
-    stripped = normalized
-    for suf in ["_001", "_01", "_1"]:
-        if stripped.endswith(suf):
-            stripped = stripped[: -len(suf)]
-    bases += [
         f"src.agents.{stripped}",
         f"src.agents.{stripped}.main",
         f"src.agents.{stripped.lower()}",
         f"src.agents.{stripped.lower()}.main",
     ]
 
-    # Unique preserve order
-    seen = set()
-    out: list[str] = []
-    for m in bases:
-        if m not in seen:
-            seen.add(m)
-            out.append(m)
-    return out
-
 
 def _resolve_agent_entrypoint(agent: str) -> Callable[[RunContext], Any]:
-    """
-    Expected agent entrypoints (any one is fine):
-      - run(ctx)
-      - main(ctx)
-      - handler(ctx)
-    """
-    last_err: Optional[BaseException] = None
+    last_err = None
     for mod_name in _agent_module_candidates(agent):
         try:
             mod = importlib.import_module(mod_name)
+            if hasattr(mod, "run") and callable(getattr(mod, "run")):
+                return getattr(mod, "run")
+            if hasattr(mod, "main") and callable(getattr(mod, "main")):
+                return getattr(mod, "main")
         except Exception as e:
             last_err = e
-            continue
 
-        for fn_name in ("run", "main", "handler"):
-            fn = getattr(mod, fn_name, None)
-            if callable(fn):
-                return fn  # type: ignore[return-value]
-
-    msg = [
-        f"Could not import/run agent '{agent}'. Tried modules:",
-        *[f"  - {m}" for m in _agent_module_candidates(agent)],
-        "",
-        "Expected an entry function named one of: run(ctx), main(ctx), handler(ctx).",
-        "Create one of those in your agent module.",
-    ]
-    if last_err is not None:
-        msg.append("")
-        msg.append(f"Last import error: {last_err.__class__.__name__}: {last_err}")
-    raise RuntimeError("\n".join(msg))
+    tried = "\n".join([f"  - {m}" for m in _agent_module_candidates(agent)])
+    raise RuntimeError(
+        f"Could not import/run agent '{agent}'. Tried modules:\n{tried}\n"
+        f"Last error: {last_err}\n"
+        "Create a module with a `run(ctx)` or `main(ctx)` entrypoint."
+    )
 
 
-def _write_run_artifact(out_dir: Path, agent: str, receipt: Dict[str, Any], result: Any) -> Path:
-    out_dir.mkdir(parents=True, exist_ok=True)
+def _write_run_artifact(out_dir: Path, agent: str, warrant: Dict[str, Any], result: Any) -> Path:
     payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "agent": agent,
-        "timestamp": utc_now_iso(),
-        "receipt": receipt,
+        "warrant_id": warrant.get("warrant_id"),
+        "issuer": warrant.get("issuer"),
+        "policy_bundle_sha256": (warrant.get("policy") or {}).get("bundle_sha256"),
+        "claims": warrant.get("claims", {}),
         "result": result,
     }
     fp = out_dir / f"{agent}__{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
-    fp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    fp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return fp
 
 
-def _optional_policy_gate(agent: str, receipt: Dict[str, Any]) -> None:
-    """
-    If stegcore is present and you want to enforce policy, do it here.
-    This does NOT reference banned strings.
-    """
-    if decide is None or ActionIntent is None:
-        return
-
+def _load_warrant_from_env() -> Dict[str, Any]:
+    raw = os.getenv("STEGVERSE_WARRANT_JSON", "").strip()
+    if not raw:
+        raise RuntimeError("Missing STEGVERSE_WARRANT_JSON (Execution Warrant required).")
     try:
-        intent = ActionIntent(action="run_agent", target=agent, metadata={"issuer": receipt.get("issuer", "local")})
-        decision = decide(intent)
-        if not getattr(decision, "allowed", True):
-            reason = getattr(decision, "reason", "Policy denied agent run.")
-            raise PermissionError(reason)
+        return json.loads(raw)
     except Exception as e:
-        raise PermissionError(str(e)) from e
+        raise RuntimeError(f"Invalid STEGVERSE_WARRANT_JSON: {e}")
+
+
+def _load_tv_public_key_b64() -> str:
+    # For Sprint 1: simplest path is to pass issuer pubkey via env in CI.
+    # Sprint 2: load from TV-exported bundle pinned by hash.
+    pk = os.getenv("TV_WARRANT_ISSUER_PUBKEY_B64", "").strip()
+    if not pk:
+        raise RuntimeError("Missing TV_WARRANT_ISSUER_PUBKEY_B64.")
+    return pk
+
+
+def _required_policy_gate(agent: str, warrant: Dict[str, Any]) -> None:
+    # Optional StegCore gate hook preserved, but warrant validation is always required.
+    # If you have StegCore installed, you can enforce additional policy here.
+    try:
+        from .stegcore_guard import enforce_policy  # type: ignore
+
+        intent = ActionIntent(action="run_agent", target=agent, metadata={"issuer": warrant.get("issuer", "unknown")})
+        decision = enforce_policy(intent=intent, receipt=warrant)
+        verdict = getattr(decision, "verdict", "ALLOW")
+        if verdict != "ALLOW":
+            reason = getattr(decision, "reason", "Policy denied agent run.")
+            raise RuntimeError(f"DENIED_BY_STEGCORE: {verdict} {reason}")
+    except ModuleNotFoundError:
+        # No StegCore in repo: that's fine for Sprint 1.
+        return
 
 
 def run_agent(agent: str) -> int:
-    receipt = _load_receipt_from_env()
+    mode = os.getenv("STEGVERSE_POLICY_MODE", "strict").strip().lower()
+    if mode not in ("strict", "warn", "off"):
+        mode = "strict"
 
-    # Verify receipt (local verifier). If invalid, stop.
-    verified = verify_receipt(receipt)
-    if not verified.get("ok", False):
-        print("❌ Receipt verification failed.")
-        print(json.dumps(verified, indent=2))
-        return 3
+    warrant = _load_warrant_from_env()
 
-    # Optional policy gate (if StegCore present)
-    _optional_policy_gate(agent, receipt)
+    expected_bundle = os.getenv("TV_POLICY_BUNDLE_SHA256", "").strip()
+    if not expected_bundle:
+        raise RuntimeError("Missing TV_POLICY_BUNDLE_SHA256 (pinning required).")
 
-    ctx = RunContext(
-        agent_name=agent,
-        out_dir=OUT_DIR,
-        receipt=receipt,
-        env=dict(os.environ),
+    repo = os.getenv("GITHUB_REPOSITORY", "").strip() or os.getenv("REPO", "").strip()
+    commit_sha = os.getenv("GITHUB_SHA", "").strip() or os.getenv("COMMIT_SHA", "").strip()
+    if not repo or not commit_sha:
+        raise RuntimeError("Missing observed repo/commit (need GITHUB_REPOSITORY and GITHUB_SHA).")
+
+    issuer_pubkey_b64 = _load_tv_public_key_b64()
+    max_ttl = int(os.getenv("TV_WARRANT_MAX_TTL_SECONDS", "900").strip())
+
+    decision = verify_warrant(
+        warrant=warrant,
+        issuer_pubkey_b64=issuer_pubkey_b64,
+        expected_bundle_sha256=expected_bundle,
+        observed_repo=repo,
+        observed_commit_sha=commit_sha,
+        max_ttl_seconds=max_ttl,
     )
 
+    if not decision.ok:
+        msg = f"❌ Warrant verification failed: {decision.reason}"
+        if mode == "warn":
+            print(msg)
+        elif mode == "off":
+            print("⚠️ Policy mode off; ignoring warrant failure.")
+        else:
+            raise RuntimeError(msg)
+    else:
+        print(f"✅ Warrant verified. payload_sha256={decision.payload_sha256}")
+
+    # Additional policy gate (if StegCore present)
+    if mode != "off":
+        _required_policy_gate(agent, warrant)
+
+    ctx = RunContext(agent_name=agent, receipt=warrant, metadata={})
     entry = _resolve_agent_entrypoint(agent)
     result = entry(ctx)
 
-    artifact = _write_run_artifact(OUT_DIR, agent, receipt, result)
+    artifact = _write_run_artifact(OUT_DIR, agent, warrant, result)
     print(f"✅ Agent completed. Wrote: {artifact}")
     return 0
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main() -> int:
     parser = argparse.ArgumentParser(description="StegAgents runner")
     parser.add_argument("--agent", required=True, help="Agent name (e.g., GrantFinder-001)")
-    args = parser.parse_args(argv)
-
-    try:
-        return run_agent(args.agent)
-    except PermissionError as e:
-        print(f"⛔ Denied: {e}")
-        return 4
-    except Exception as e:
-        print(f"❌ Failed: {e.__class__.__name__}: {e}")
-        return 1
+    args = parser.parse_args()
+    return run_agent(args.agent)
 
 
 if __name__ == "__main__":
